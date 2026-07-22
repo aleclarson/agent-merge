@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Agent Merge'
+  short_description: 'Integrate finished agent work into dev'
+  default_prompt: 'Use $agent-merge to integrate my finished, verified, committed work into dev.'
