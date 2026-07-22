@@ -1,16 +1,18 @@
 {
   "name": "agent-merge",
   "version": "0.0.0",
+  "description": "Serialize Git worktree submissions onto a shared local development branch",
   "license": "MIT OR Apache-2.0",
   "author": "Alec Larson",
   "repository": {
     "type": "git",
     "url": "https://github.com/aleclarson/agent-merge.git"
   },
+  "bin": {
+    "agent-merge": "./dist/cli.mjs"
+  },
   "files": [
-    "dist",
-    "docs",
-    "examples"
+    "dist"
   ],
   "type": "module",
   "exports": {
@@ -23,19 +25,25 @@
     "format": "oxfmt .",
     "lint": "oxlint src",
     "typecheck": "tsc --noEmit && tsc -p test --noEmit",
-    "test": "vitest",
+    "test": "vitest run",
     "prepublishOnly": "pnpm build",
     "sync-agent-rules": "curl -fsSL https://gist.githubusercontent.com/aleclarson/4c80686b1c3e204a01cdbe82f8e2c084/raw/AGENTS.md -o AGENTS.md && git add AGENTS.md && git commit -m 'chore: sync agent rules'"
+  },
+  "dependencies": {
+    "@alloc/cmd-ts": "^0.17.0",
+    "fs-native-extensions": "^1.5.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "oxfmt": "^0.59.0",
     "oxlint": "^1.74.0",
-    "radashi": "^12.9.1",
     "tsdown": "^0.22.7",
     "tsnapi": "^1.0.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "packageManager": "pnpm@11.5.1"
 }
