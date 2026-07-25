@@ -35,6 +35,27 @@ test('rebases an agent branch and fast-forwards dev without moving main', async 
   expect(messages.at(-1)).toMatch(/^Integrated agent-one into dev at /)
 })
 
+test('rebases a detached worktree and fast-forwards dev', async () => {
+  const fixture = createFixture()
+  commitFile(fixture.root, 'dev.txt', 'from dev\n', 'dev change', 'dev')
+  const agent = createDetachedWorktree(fixture, 'detached-agent')
+  commitFile(agent, 'agent.txt', 'from agent\n', 'agent change')
+
+  const originalMain = git(fixture.root, 'rev-parse', 'main')
+  const originalAgent = git(agent, 'rev-parse', 'HEAD')
+  const messages: string[] = []
+
+  await submit({ cwd: agent, log: (message) => messages.push(message) })
+
+  const dev = git(fixture.root, 'rev-parse', 'dev')
+  expect(git(fixture.root, 'rev-parse', 'main')).toBe(originalMain)
+  expect(git(agent, 'branch', '--show-current')).toBe('')
+  expect(git(agent, 'rev-parse', 'HEAD')).not.toBe(originalAgent)
+  expect(git(agent, 'rev-parse', 'HEAD')).toBe(dev)
+  expect(readFileSync(join(agent, 'dev.txt'), 'utf8')).toBe('from dev\n')
+  expect(messages.at(-1)).toMatch(/^Integrated detached HEAD into dev at /)
+})
+
 test('rejects uncommitted work before acquiring the lock', async () => {
   const fixture = createFixture()
   const agent = createAgentWorktree(fixture, 'dirty-agent')
@@ -109,6 +130,37 @@ test('rechecks HEAD after waiting for another process to release the lock', asyn
   await holder.done
 })
 
+test('rechecks detached HEAD state after waiting for the lock', async () => {
+  const fixture = createFixture()
+  const agent = createDetachedWorktree(fixture, 'waiting-detached-agent')
+  commitFile(agent, 'agent.txt', 'change\n', 'agent change')
+  const commonDirectory = git(
+    fixture.root,
+    'rev-parse',
+    '--path-format=absolute',
+    '--git-common-dir',
+  )
+  const holder = holdLock(join(commonDirectory, 'agent-merge.lock'))
+  await holder.ready
+
+  let announceWaiting!: () => void
+  const waiting = new Promise<void>((resolve) => {
+    announceWaiting = resolve
+  })
+  const submission = submit({
+    cwd: agent,
+    log(message) {
+      if (message.includes('Waiting')) announceWaiting()
+    },
+  })
+
+  await waiting
+  git(agent, 'switch', '-c', 'attached-while-waiting')
+
+  await expect(submission).rejects.toMatchObject({ exitCode: exitCodes.worktreeChanged })
+  await holder.done
+})
+
 interface Fixture {
   root: string
   worktrees: string
@@ -134,6 +186,12 @@ function createFixture(): Fixture {
 function createAgentWorktree(fixture: Fixture, branch: string): string {
   const path = join(fixture.worktrees, branch)
   git(fixture.root, 'worktree', 'add', '-b', branch, path, 'main')
+  return path
+}
+
+function createDetachedWorktree(fixture: Fixture, name: string): string {
+  const path = join(fixture.worktrees, name)
+  git(fixture.root, 'worktree', 'add', '--detach', path, 'main')
   return path
 }
 

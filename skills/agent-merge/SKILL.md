@@ -15,7 +15,7 @@ agent-merge submit
 
 The command may block while another agent integrates first. Do not modify the worktree while it runs.
 
-The command rejects dirty worktrees, waits for exclusive access to `dev`, rebases the current work onto the latest `dev`, runs repository verification, and advances `dev` on success. Commits and `HEAD` may change during the rebase.
+The command rejects dirty worktrees, waits for exclusive access to `dev`, rebases the current work onto the latest `dev`, runs repository verification, and advances `dev` on success. Attached agent branches and detached worktrees are supported. Commits and `HEAD` may change during the rebase.
 
 ## Results
 

@@ -38,7 +38,7 @@ interface CommandResult {
 interface Repository {
   root: string
   commonDirectory: string
-  branch: string
+  branch: string | null
 }
 
 export async function submit(options: SubmitOptions = {}): Promise<void> {
@@ -103,7 +103,9 @@ export async function submit(options: SubmitOptions = {}): Promise<void> {
       )
     }
 
-    log(`Integrated ${repository.branch} into dev at ${rebasedHead.slice(0, 12)}.`)
+    log(
+      `Integrated ${repository.branch ?? 'detached HEAD'} into dev at ${rebasedHead.slice(0, 12)}.`,
+    )
   } finally {
     try {
       if (isLocked) unlock(lockFile.fd)
@@ -129,11 +131,13 @@ async function inspectRepository(cwd: string): Promise<Repository> {
     cwd: root,
   })
 
-  if (branchResult.status !== 0) {
-    throw new AgentMergeError('Submit from an agent branch, not a detached HEAD.')
+  if (branchResult.status !== 0 && branchResult.status !== 1) {
+    throw new AgentMergeError(
+      branchResult.stderr.trim() || 'Git could not determine the current branch.',
+    )
   }
 
-  const branch = branchResult.stdout.trim()
+  const branch = branchResult.status === 0 ? branchResult.stdout.trim() : null
   if (branch === 'dev' || branch === 'main') {
     throw new AgentMergeError(`Submit from an agent branch, not ${branch}.`)
   }
@@ -163,6 +167,11 @@ async function assertWorktreeUnchanged(repository: Repository, initialHead: stri
   const branchResult = await runCommand('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
     cwd: repository.root,
   })
+  if (branchResult.status !== 0 && branchResult.status !== 1) {
+    throw new AgentMergeError(
+      branchResult.stderr.trim() || 'Git could not determine the current branch.',
+    )
+  }
   const currentBranch = branchResult.status === 0 ? branchResult.stdout.trim() : null
   const status = await gitText(repository.root, [
     'status',

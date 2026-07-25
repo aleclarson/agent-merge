@@ -21,7 +21,7 @@ remember HEAD
         ↓
 wait for the repository lock
         ↓
-recheck HEAD, branch, and worktree
+recheck HEAD, branch attachment, and worktree
         ↓
 rebase onto current dev if needed
         ↓
@@ -90,12 +90,21 @@ git worktree add -b agent/auth ../project-agent-auth dev
 git worktree add -b agent/billing ../project-agent-billing dev
 ```
 
+Detached worktrees are also supported:
+
+```bash
+git worktree add --detach ../project-agent-auth dev
+```
+
+Submission rebases the detached `HEAD` and leaves the worktree detached. On success, `dev`
+references the submitted commit.
+
 It is also safe for an agent to have started from an older `dev` or from `main`; submission rebases its commits onto the current `dev` while holding the integration lock.
 
 Give each agent this protocol in `AGENTS.md`, a skill, or its task prompt:
 
 ```text
-1. Commit all intended work on your agent branch.
+1. Commit all intended work in your agent worktree.
 2. Run `agent-merge submit`.
 3. Do not modify the worktree while the command waits.
 4. On success, your work is in the shared local `dev` branch.
@@ -126,7 +135,7 @@ When verification fails, the completed rebase remains on the agent branch but `d
 ## Safety guarantees
 
 - The command rejects tracked or untracked worktree changes before waiting.
-- After acquiring the lock, it checks that `HEAD`, the branch, the worktree, and Git operation state did not change while waiting.
+- After acquiring the lock, it checks that `HEAD`, branch attachment, the worktree, and Git operation state did not change while waiting.
 - It never checks out or updates `main`.
 - It does not hold the lock while an agent resolves conflicts or repairs failed verification.
 - It advances `refs/heads/dev` with `git update-ref <new> <old>`, so an unexpected external update fails instead of being overwritten.
