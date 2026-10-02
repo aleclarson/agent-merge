@@ -56,6 +56,83 @@ test('rebases a detached worktree and fast-forwards dev', async () => {
   expect(messages.at(-1)).toMatch(/^Integrated detached HEAD into dev at /)
 })
 
+test('fast-forwards dev inside the worktree where it is checked out', async () => {
+  const fixture = createFixture()
+  const devWorktree = join(fixture.worktrees, 'dev-checkout')
+  git(fixture.root, 'worktree', 'add', devWorktree, 'dev')
+  commitFile(devWorktree, 'dev.txt', 'from dev\n', 'dev change')
+  const agent = createAgentWorktree(fixture, 'agent-one')
+  commitFile(agent, 'agent.txt', 'from agent\n', 'agent change')
+  const messages: string[] = []
+
+  await submit({ cwd: agent, log: (message) => messages.push(message) })
+
+  const dev = git(fixture.root, 'rev-parse', 'dev')
+  expect(dev).toBe(git(agent, 'rev-parse', 'HEAD'))
+  expect(git(devWorktree, 'rev-parse', 'HEAD')).toBe(dev)
+  expect(readFileSync(join(devWorktree, 'agent.txt'), 'utf8')).toBe('from agent\n')
+  expect(git(devWorktree, 'status', '--porcelain')).toBe('')
+  expect(messages.at(-1)).toMatch(/^Integrated agent-one into dev at /)
+})
+
+test('preserves unrelated local changes in the checked-out dev worktree', async () => {
+  const fixture = createFixture()
+  const devWorktree = join(fixture.worktrees, 'dev-checkout')
+  git(fixture.root, 'worktree', 'add', devWorktree, 'dev')
+  writeFileSync(join(devWorktree, 'wip.txt'), 'keep me\n')
+  const agent = createAgentWorktree(fixture, 'agent-one')
+  commitFile(agent, 'agent.txt', 'from agent\n', 'agent change')
+
+  await submit({ cwd: agent, log: () => {} })
+
+  expect(readFileSync(join(devWorktree, 'wip.txt'), 'utf8')).toBe('keep me\n')
+  expect(readFileSync(join(devWorktree, 'agent.txt'), 'utf8')).toBe('from agent\n')
+})
+
+test('fails instead of overwriting local changes in the dev worktree', async () => {
+  const fixture = createFixture()
+  const devWorktree = join(fixture.worktrees, 'dev-checkout')
+  git(fixture.root, 'worktree', 'add', devWorktree, 'dev')
+  writeFileSync(join(devWorktree, 'shared.txt'), 'local edits\n')
+  const agent = createAgentWorktree(fixture, 'agent-one')
+  commitFile(agent, 'shared.txt', 'agent version\n', 'agent change')
+  const originalDev = git(fixture.root, 'rev-parse', 'dev')
+
+  await expect(submit({ cwd: agent, log: () => {} })).rejects.toMatchObject({
+    exitCode: exitCodes.error,
+    message: expect.stringContaining('local changes'),
+  })
+  expect(git(fixture.root, 'rev-parse', 'dev')).toBe(originalDev)
+  expect(readFileSync(join(devWorktree, 'shared.txt'), 'utf8')).toBe('local edits\n')
+  expect(git(devWorktree, 'symbolic-ref', '--short', 'HEAD')).toBe('dev')
+})
+
+test('fails while a Git operation is in progress in the dev worktree', async () => {
+  const fixture = createFixture()
+  const devWorktree = join(fixture.worktrees, 'dev-checkout')
+  git(fixture.root, 'worktree', 'add', devWorktree, 'dev')
+  commitFile(devWorktree, 'shared.txt', 'dev version\n', 'dev change')
+  const side = join(fixture.worktrees, 'side')
+  git(fixture.root, 'worktree', 'add', '-b', 'side', side, 'main')
+  commitFile(side, 'shared.txt', 'side version\n', 'side change')
+  try {
+    git(devWorktree, 'merge', 'side')
+  } catch {
+    // The merge conflicts and stays in progress on purpose.
+  }
+  expect(gitPathExists(devWorktree, 'MERGE_HEAD')).toBe(true)
+  const agent = createAgentWorktree(fixture, 'agent-one')
+  commitFile(agent, 'agent.txt', 'from agent\n', 'agent change')
+  const originalDev = git(fixture.root, 'rev-parse', 'dev')
+
+  await expect(submit({ cwd: agent, log: () => {} })).rejects.toMatchObject({
+    exitCode: exitCodes.error,
+    message: expect.stringContaining('in progress'),
+  })
+  expect(git(fixture.root, 'rev-parse', 'dev')).toBe(originalDev)
+  expect(gitPathExists(devWorktree, 'MERGE_HEAD')).toBe(true)
+})
+
 test('rejects uncommitted work before acquiring the lock', async () => {
   const fixture = createFixture()
   const agent = createAgentWorktree(fixture, 'dirty-agent')

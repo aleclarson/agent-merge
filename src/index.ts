@@ -48,7 +48,7 @@ export async function submit(options: SubmitOptions = {}): Promise<void> {
 
   await assertNoOperation(repository.root)
   await assertClean(repository.root)
-  await assertDevIsAvailable(repository.root)
+  await assertDevExists(repository.root)
 
   const initialHead = await gitText(repository.root, ['rev-parse', '--verify', 'HEAD'])
   const lockPath = join(repository.commonDirectory, 'agent-merge.lock')
@@ -63,7 +63,7 @@ export async function submit(options: SubmitOptions = {}): Promise<void> {
     isLocked = true
 
     await assertWorktreeUnchanged(repository, initialHead)
-    await assertDevIsAvailable(repository.root)
+    await assertDevExists(repository.root)
 
     const oldDev = await gitText(repository.root, ['rev-parse', '--verify', 'refs/heads/dev'])
 
@@ -88,19 +88,24 @@ export async function submit(options: SubmitOptions = {}): Promise<void> {
 
     const rebasedHead = await gitText(repository.root, ['rev-parse', '--verify', 'HEAD'])
     await verify(repository.root, oldDev, rebasedHead, log)
-    await assertDevIsAvailable(repository.root)
+    await assertDevExists(repository.root)
 
-    const update = await runCommand(
-      'git',
-      ['update-ref', '-m', 'agent-merge submit', 'refs/heads/dev', rebasedHead, oldDev],
-      { cwd: repository.root },
-    )
-
-    if (update.status !== 0) {
-      throw new AgentMergeError(
-        'The dev branch changed outside agent-merge. Nothing was overwritten; run `agent-merge submit` again.',
-        exitCodes.devChanged,
+    const devWorktree = await findDevWorktree(repository.root)
+    if (devWorktree) {
+      await fastForwardDev(devWorktree, oldDev, rebasedHead)
+    } else {
+      const update = await runCommand(
+        'git',
+        ['update-ref', '-m', 'agent-merge submit', 'refs/heads/dev', rebasedHead, oldDev],
+        { cwd: repository.root },
       )
+
+      if (update.status !== 0) {
+        throw new AgentMergeError(
+          'The dev branch changed outside agent-merge. Nothing was overwritten; run `agent-merge submit` again.',
+          exitCodes.devChanged,
+        )
+      }
     }
 
     log(
@@ -192,25 +197,92 @@ async function assertWorktreeUnchanged(repository: Repository, initialHead: stri
   }
 }
 
-async function assertDevIsAvailable(root: string): Promise<void> {
+async function assertDevExists(root: string): Promise<void> {
   const dev = await runCommand('git', ['show-ref', '--verify', '--quiet', 'refs/heads/dev'], {
     cwd: root,
   })
   if (dev.status !== 0) {
     throw new AgentMergeError('The repository has no local dev branch.')
   }
+}
 
-  const worktrees = await gitText(root, ['worktree', 'list', '--porcelain'])
-  const entries = worktrees.split(/\n\n+/)
-  for (const entry of entries) {
-    const lines = entry.split('\n')
-    if (!lines.includes('branch refs/heads/dev')) continue
+async function findDevWorktree(root: string): Promise<string | null> {
+  // `-z` separates attributes with NUL and leaves paths unquoted.
+  const worktrees = await gitText(root, ['worktree', 'list', '--porcelain', '-z'])
+  let location: string | null = null
+  for (const line of worktrees.split('\0')) {
+    if (line.startsWith('worktree ')) location = line.slice(9)
+    else if (line === 'branch refs/heads/dev') return location
+  }
+  return null
+}
 
-    const location = lines.find((line) => line.startsWith('worktree '))?.slice(9)
+// When dev is checked out in another worktree, `git update-ref` would still
+// move the ref (Git does not guard refs against linked worktrees) but leave
+// that worktree stale: every integrated change would look like an uncommitted
+// edit there. Fast-forwarding from inside the worktree is the one branch
+// update Git permits on a checked-out branch — it keeps the worktree's files
+// in sync with dev and refuses before touching anything when local changes or
+// an in-progress operation would be lost. A fast-forward never creates
+// MERGE_HEAD, so an interrupted submission cannot leave a merge in progress.
+async function fastForwardDev(
+  worktree: string,
+  oldDev: string,
+  rebasedHead: string,
+): Promise<void> {
+  // Merging fast-forwards whatever the worktree has checked out at its current
+  // commit, so confirm it is still dev at the commit we rebased onto. A caller
+  // or external writer that moved or detached it would otherwise be absorbed
+  // into the submission.
+  const head = await gitText(worktree, ['rev-parse', '--verify', 'HEAD'])
+  const branch = await runCommand('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+    cwd: worktree,
+  })
+  if (branch.status !== 0 && branch.status !== 1) {
     throw new AgentMergeError(
-      `The dev branch is checked out${location ? ` at ${location}` : ''}. Remove that worktree before submitting so dev can be updated safely.`,
+      branch.stderr.trim() || 'Git could not determine the dev worktree branch.',
     )
   }
+  if (branch.status !== 0 || branch.stdout.trim() !== 'dev') {
+    throw new AgentMergeError(
+      `The dev worktree at ${worktree} is no longer on the dev branch. Nothing was overwritten; run \`agent-merge submit\` again.`,
+      exitCodes.devChanged,
+    )
+  }
+  if (head !== oldDev) {
+    throw new AgentMergeError(
+      'The dev branch changed outside agent-merge. Nothing was overwritten; run `agent-merge submit` again.',
+      exitCodes.devChanged,
+    )
+  }
+  if (await isOperationInProgress(worktree)) {
+    throw new AgentMergeError(
+      `A Git operation is in progress in the dev worktree at ${worktree}. Finish or abort it, then submit again.`,
+    )
+  }
+
+  const merge = await runCommand('git', ['merge', '--ff-only', rebasedHead], {
+    cwd: worktree,
+    inheritOutput: true,
+  })
+  if (merge.status === 0) return
+
+  if ((await gitText(worktree, ['rev-parse', '--verify', 'HEAD'])) !== oldDev) {
+    throw new AgentMergeError(
+      'The dev branch changed outside agent-merge. Nothing was overwritten; run `agent-merge submit` again.',
+      exitCodes.devChanged,
+    )
+  }
+  const status = await gitText(worktree, ['status', '--porcelain=v1', '--untracked-files=normal'])
+  if (status) {
+    throw new AgentMergeError(
+      `The dev worktree at ${worktree} has local changes that would be overwritten. Commit or clean them there, then submit again.`,
+    )
+  }
+  throw new AgentMergeError(
+    'Git could not fast-forward dev. Nothing was overwritten; run `agent-merge submit` again.',
+    exitCodes.devChanged,
+  )
 }
 
 async function verify(

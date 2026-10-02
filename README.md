@@ -38,7 +38,7 @@ File locks do not guarantee strict FIFO order. With a small number of local agen
 
 - Node.js 22 or newer
 - Git with linked-worktree support
-- A local `dev` branch that is not checked out in any worktree
+- A local `dev` branch
 
 Install globally so every worktree can use the same command:
 
@@ -59,7 +59,7 @@ Create the integration branch once, normally from the QA-stable `main` branch:
 git branch dev main
 ```
 
-Do not check out `dev`. `agent-merge` updates its ref directly; refusing to update a checked-out `dev` prevents another worktree's index and files from becoming stale.
+`dev` may stay checked out in a worktree. When it is, each submission fast-forwards it in place so that worktree's files track `dev`; local changes there are preserved, and changes that would be overwritten block the submission instead of being lost.
 
 ## Configure verification
 
@@ -138,7 +138,7 @@ When verification fails, the completed rebase remains on the agent branch but `d
 - After acquiring the lock, it checks that `HEAD`, branch attachment, the worktree, and Git operation state did not change while waiting.
 - It never checks out or updates `main`.
 - It does not hold the lock while an agent resolves conflicts or repairs failed verification.
-- It advances `refs/heads/dev` with `git update-ref <new> <old>`, so an unexpected external update fails instead of being overwritten.
+- It advances `refs/heads/dev` with `git update-ref <new> <old>` — or, when `dev` is checked out in a worktree, a fast-forward merge inside that worktree — so an unexpected external update fails instead of being overwritten.
 - The lock is advisory: other processes can ignore it. The compare-and-swap update still protects the final `dev` ref from an outside writer.
 
 ## Exit statuses
